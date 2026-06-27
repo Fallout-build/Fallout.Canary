@@ -80,20 +80,19 @@ jobs:
               ...context.repo, state: 'open', labels: label, per_page: 100,
             });
             const match = open.find(i => i.title === title);
+            // Open once and stay quiet while it remains open — a scheduled run shouldn't
+            // post a "still failing" comment every night on a known/triaged failure. The
+            // recovery path comments + closes, so transitions are still visible.
+            if (match) {
+              console.log(`Issue #${match.number} already open for "${scenario}" — no comment.`);
+              return;
+            }
             const body =
               `Scenario **\`${scenario}\`** failed against the latest \`-preview\`.\n\n` +
               `- Resolved package version: \`${version}\`\n` +
               `- Failed run: ${runUrl}\n` +
               `- When: ${new Date().toISOString()}`;
-
-            if (match) {
-              await github.rest.issues.createComment({
-                ...context.repo, issue_number: match.number,
-                body: `Still failing.\n\n${body}`,
-              });
-            } else {
-              await github.rest.issues.create({ ...context.repo, title, labels: [label], body });
-            }
+            await github.rest.issues.create({ ...context.repo, title, labels: [label], body });
 
       - name: 'On success: close the canary issue if open'
         if: success()
