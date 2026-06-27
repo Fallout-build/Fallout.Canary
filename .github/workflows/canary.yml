@@ -1,0 +1,118 @@
+# Canary: consume the latest published Fallout -preview packages like a real user and
+# fail loudly (open an issue) if any scenario build breaks.
+name: canary
+
+on:
+  # Fired by Fallout's preview.yml after a -preview publish (see docs/DESIGN.md).
+  repository_dispatch:
+    types: [fallout-preview-published]
+  # Safety net so the canary keeps running even before the dispatch link is wired.
+  schedule:
+    - cron: '0 5 * * *'   # 05:00 UTC nightly
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  scenario:
+    name: ${{ matrix.scenario }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false        # one broken scenario must not mask the others
+      matrix:
+        scenario: [minimal, transition-shims]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: 'Setup: .NET SDK'
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: 'Restore + record resolved -preview version'
+        id: ver
+        env:
+          FALLOUT_PACKAGES_TOKEN: ${{ secrets.FALLOUT_PACKAGES_TOKEN }}
+        run: |
+          set -euo pipefail
+          proj="scenarios/${{ matrix.scenario }}/build/_build.csproj"
+          dotnet restore "$proj"
+          ver=$(dotnet list "$proj" package 2>/dev/null \
+            | grep -iE 'Fallout\.Common|Nuke\.Common' | head -1 | awk '{print $NF}' || true)
+          echo "version=${ver:-unknown}" >> "$GITHUB_OUTPUT"
+          echo "Resolved package version: ${ver:-unknown}"
+
+      - name: 'Run scenario build'
+        id: run
+        env:
+          FALLOUT_PACKAGES_TOKEN: ${{ secrets.FALLOUT_PACKAGES_TOKEN }}
+        run: dotnet run --project "scenarios/${{ matrix.scenario }}/build/_build.csproj" --no-restore
+
+      - name: 'On failure: open or update the canary issue'
+        if: failure()
+        uses: actions/github-script@v7
+        env:
+          SCENARIO: ${{ matrix.scenario }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        with:
+          script: |
+            const scenario = process.env.SCENARIO;
+            const version = process.env.VERSION || 'unknown';
+            const label = 'canary-failure';
+            const title = `Canary failure: ${scenario}`;
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+            // Ensure the label exists (first run won't have it yet).
+            try {
+              await github.rest.issues.getLabel({ ...context.repo, name: label });
+            } catch {
+              await github.rest.issues.createLabel({
+                ...context.repo, name: label, color: 'b60205',
+                description: 'A canary scenario build failed against the latest -preview',
+              });
+            }
+
+            const open = await github.paginate(github.rest.issues.listForRepo, {
+              ...context.repo, state: 'open', labels: label, per_page: 100,
+            });
+            const match = open.find(i => i.title === title);
+            const body =
+              `Scenario **\`${scenario}\`** failed against the latest \`-preview\`.\n\n` +
+              `- Resolved package version: \`${version}\`\n` +
+              `- Failed run: ${runUrl}\n` +
+              `- When: ${new Date().toISOString()}`;
+
+            if (match) {
+              await github.rest.issues.createComment({
+                ...context.repo, issue_number: match.number,
+                body: `Still failing.\n\n${body}`,
+              });
+            } else {
+              await github.rest.issues.create({ ...context.repo, title, labels: [label], body });
+            }
+
+      - name: 'On success: close the canary issue if open'
+        if: success()
+        uses: actions/github-script@v7
+        env:
+          SCENARIO: ${{ matrix.scenario }}
+        with:
+          script: |
+            const scenario = process.env.SCENARIO;
+            const label = 'canary-failure';
+            const title = `Canary failure: ${scenario}`;
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+            const open = await github.paginate(github.rest.issues.listForRepo, {
+              ...context.repo, state: 'open', labels: label, per_page: 100,
+            }).catch(() => []);
+            const match = open.find(i => i.title === title);
+            if (match) {
+              await github.rest.issues.createComment({
+                ...context.repo, issue_number: match.number,
+                body: `✅ Scenario **\`${scenario}\`** is green again — closing.\n\nRun: ${runUrl}`,
+              });
+              await github.rest.issues.update({ ...context.repo, issue_number: match.number, state: 'closed' });
+            }

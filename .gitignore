@@ -1,0 +1,15 @@
+## .NET build output
+bin/
+obj/
+[Oo]utput/
+artifacts/
+
+## Fallout working dirs
+.fallout/temp/
+.fallout/build-attempt*.json
+
+## IDE / OS
+.vs/
+.idea/
+*.user
+.DS_Store
