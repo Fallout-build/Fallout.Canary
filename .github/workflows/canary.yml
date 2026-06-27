@@ -46,9 +46,11 @@ jobs:
 
       - name: 'Run scenario build'
         id: run
+        # Run from the scenario root so Fallout's root-marker walk finds its .fallout/ dir.
+        working-directory: scenarios/${{ matrix.scenario }}
         env:
           FALLOUT_PACKAGES_TOKEN: ${{ secrets.FALLOUT_PACKAGES_TOKEN }}
-        run: dotnet run --project "scenarios/${{ matrix.scenario }}/build/_build.csproj" --no-restore
+        run: dotnet run --project build/_build.csproj --no-restore
 
       - name: 'On failure: open or update the canary issue'
         if: failure()
