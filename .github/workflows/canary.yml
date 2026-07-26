@@ -22,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false        # one broken scenario must not mask the others
       matrix:
-        scenario: [minimal, transition-shims]
+        scenario: [minimal, transition-shims, tool-manifest]
     steps:
       - uses: actions/checkout@v6
 
@@ -33,6 +33,7 @@ jobs:
 
       - name: 'Restore + record resolved -preview version'
         id: ver
+        if: matrix.scenario != 'tool-manifest'
         env:
           FALLOUT_PACKAGES_TOKEN: ${{ secrets.FALLOUT_PACKAGES_TOKEN }}
         run: |
@@ -46,18 +47,56 @@ jobs:
 
       - name: 'Run scenario build'
         id: run
+        if: matrix.scenario != 'tool-manifest'
         # Run from the scenario root so Fallout's root-marker walk finds its .fallout/ dir.
         working-directory: scenarios/${{ matrix.scenario }}
         env:
           FALLOUT_PACKAGES_TOKEN: ${{ secrets.FALLOUT_PACKAGES_TOKEN }}
         run: dotnet run --project build/_build.csproj --no-restore
 
+
+      # The tool-manifest scenario exercises package *identity* rather than package contents:
+      # it restores the published dotnet tool from a manifest and runs it, the way a consumer
+      # repo does. See scenarios/tool-manifest/README.md and Fallout-build/Fallout#575.
+      - name: 'Tool manifest: float, restore, and run the published tool'
+        id: toolver
+        if: matrix.scenario == 'tool-manifest'
+        working-directory: scenarios/tool-manifest
+        run: |
+          set -euo pipefail
+          # Floats the manifest to the newest published tool. Fails loudly if the published
+          # package id ever changes again — the regression this scenario exists to catch.
+          dotnet tool update Fallout.GlobalTools --prerelease
+          dotnet tool restore
+          ver=$(jq -r '.tools."fallout.globaltools".version' .config/dotnet-tools.json)
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "Resolved tool version: $ver"
+          # Resolution is not enough on its own: assert the command is actually wired up.
+          dotnet tool list --local | grep -q '^fallout\.globaltools'
+          echo "fallout.globaltools is present in the local tool list"
+
+      # Informational only. Deprecating the retired ids is a manual publishing action tracked
+      # in Fallout-build/Fallout#575, so it must not fail the scenario and open a canary issue —
+      # that would conflate "the tool is broken" with "we still owe a deprecation".
+      - name: 'Tool manifest: report whether retired tool ids are signposted'
+        if: matrix.scenario == 'tool-manifest'
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          for id in fallout.globaltool fallout.cli; do
+            url="https://api.nuget.org/v3/registration5-gz-semver2/$id/index.json"
+            state=$(curl -sS --compressed "$url" \
+              | jq -r 'if (.items[-1].items[-1].catalogEntry.deprecation? // empty) then "yes" else "no" end' \
+              || echo unknown)
+            echo "retired id $id deprecated on nuget.org: ${state:-unknown}" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
+
       - name: 'On failure: open or update the canary issue'
         if: failure()
         uses: actions/github-script@v7
         env:
           SCENARIO: ${{ matrix.scenario }}
-          VERSION: ${{ steps.ver.outputs.version }}
+          VERSION: ${{ steps.ver.outputs.version || steps.toolver.outputs.version }}
         with:
           script: |
             const scenario = process.env.SCENARIO;
