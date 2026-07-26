@@ -35,13 +35,14 @@ release on Fallout (-preview → GitHub Packages)
 | Tier | Scenario | Asserts |
 |------|----------|---------|
 | 0 — smoke | [`minimal`](scenarios/minimal) | `Fallout.Common` restores from the feed; a build with `Restore`/`Compile` targets compiles (source generator ran) and drives the `dotnet` tool wrapper. |
+| 1 — tool identity | [`tool-manifest`](scenarios/tool-manifest) | The published dotnet-tool package id still resolves: a manifest floats to the newest `Fallout.GlobalTools`, restores, and the `fallout` command is wired up. Reads nuget.org, not the `-preview` feed. |
 | 2 — compat | [`transition-shims`](scenarios/transition-shims) | A build authored against the legacy `Nuke.*` namespaces (`class Build : NukeBuild`) compiles and runs against the `Nuke.Common` shim package. |
 
-Tiers 1 (tool wrappers, global tool) and 3 (large target graph, multi-solution, IDE tooling) are sketched in the design doc and land incrementally.
+Tier 1's global-tool half is covered by `tool-manifest`. The remaining tier 1 (tool wrappers, and the tool *running* a build) and tier 3 (large target graph, multi-solution, IDE tooling) are sketched in the design doc and land incrementally.
 
 ## Add a scenario
 
-1. Create `scenarios/<name>/` with a Fallout consumer build at `scenarios/<name>/build/_build.csproj` and a `Build.cs` whose default target is what you want exercised.
+1. Create `scenarios/<name>/` with a Fallout consumer build at `scenarios/<name>/build/_build.csproj` and a `Build.cs` whose default target is what you want exercised. A scenario that exercises something other than a consumer build — see [`tool-manifest`](scenarios/tool-manifest) — instead gets its own step in the workflow, gated on `matrix.scenario`.
 2. Reference the released package(s) with a floated version: `Version="2026.1.*-*"`.
 3. Add `<name>` to the `scenario` matrix in [`.github/workflows/canary.yml`](.github/workflows/canary.yml).
 
