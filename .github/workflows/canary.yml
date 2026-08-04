@@ -132,7 +132,7 @@ jobs:
         run: |
           set -euo pipefail
           # The baseline lives in the csproj so there is one source of truth for it.
-          baseline=$(dotnet msbuild build/_build.csproj -getProperty:FalloutBaselineVersion)
+          baseline=$(dotnet msbuild build/_build.csproj -getProperty:CanaryBaselineVersion)
           # The target is resolved concretely rather than floated, because the same value has to
           # drive `dotnet tool install --version` further down, which will not take a range.
           # The search API returns listed versions only — which is what a consumer sees.
@@ -157,15 +157,24 @@ jobs:
       # Stage 2. Bump the version and change nothing else — the whole edit a consumer makes.
       # Green here means the upgrade is clean. Red is not a failure yet: stage 3 decides,
       # because "breaks but fallout-migrate fixes it" is a supported upgrade path, not a bug.
+      #
+      # Build and run as separate commands so a compile break is unambiguously a compile break.
+      # The version goes through the environment, never `-p:`: `dotnet run` forwards unrecognised
+      # arguments to the built app, and Fallout then reads `-p:CanaryFalloutVersion=10.4.0-rc.5`
+      # as a target name and fails with "Target with name '10.4.0rc.5' does not exist" — which
+      # under continue-on-error looks exactly like the compile break this stage is watching for.
       - name: 'Upgrade: bump to the target version'
         id: bump
         if: matrix.kind == 'upgrade'
         continue-on-error: true
         working-directory: scenarios/upgrade
+        env:
+          CanaryFalloutVersion: ${{ steps.hop.outputs.target }}
         run: |
           set -euo pipefail
           rm -rf build/obj build/bin
-          dotnet run --project build/_build.csproj -p:FalloutVersion='${{ steps.hop.outputs.target }}'
+          dotnet build build/_build.csproj
+          dotnet run --project build/_build.csproj --no-build
 
       # Stage 3. The documented escape hatch, run only when the bare bump broke. This is what
       # separates "the upgrade is rough" from "the upgrade is impossible" — and it fails the
@@ -175,6 +184,7 @@ jobs:
         working-directory: scenarios/upgrade
         env:
           TARGET: ${{ steps.hop.outputs.target }}
+          CanaryFalloutVersion: ${{ steps.hop.outputs.target }}
         run: |
           set -euo pipefail
           dotnet tool install Fallout.Migrate --version "$TARGET" --tool-path "$RUNNER_TEMP/migrate"
@@ -186,7 +196,8 @@ jobs:
           echo '--- what migrate changed ---'
           git --no-pager diff --stat
           rm -rf build/obj build/bin
-          dotnet run --project build/_build.csproj -p:FalloutVersion="$TARGET"
+          dotnet build build/_build.csproj
+          dotnet run --project build/_build.csproj --no-build
 
       # Records which path the upgrade took. A consumer needing fallout-migrate is a supported
       # outcome but not a silent one — it means the release notes owe them an upgrade note.

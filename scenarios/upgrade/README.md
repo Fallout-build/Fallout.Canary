@@ -12,14 +12,14 @@ release is fine, and existing users cannot get to it".
 
 | | Version | Where it comes from |
 |---|---|---|
-| Baseline | `10.3.49` | `FalloutBaselineVersion` in [`build/_build.csproj`](build/_build.csproj) — pinned, because it is history |
+| Baseline | `10.3.49` | `CanaryBaselineVersion` in [`build/_build.csproj`](build/_build.csproj) — pinned, because it is history |
 | Target | newest listed on nuget.org | resolved per-run by the workflow |
 
 nuget.org only ever carries the production line (`main`'s `-preview` builds go to GitHub Packages and
 never here), so "newest listed on nuget.org" *is* the current line. That makes the hop
 self-maintaining: it becomes `10.3.49 → 10.4.0` the moment 10.4.0 GA ships, with no edit here.
 
-Bump `FalloutBaselineVersion` once per production line — when 10.4 becomes the previous line, the
+Bump `CanaryBaselineVersion` once per production line — when 10.4 becomes the previous line, the
 baseline becomes the last 10.4 GA.
 
 This scenario reads **nuget.org only** (see [`nuget.config`](nuget.config)), so unlike `minimal` and
@@ -89,8 +89,14 @@ dotnet run --project build/_build.csproj
 
 # Stage 2 — the bump. `*-*` is the csproj default for the target.
 rm -rf build/obj build/bin
-dotnet run --project build/_build.csproj -p:FalloutVersion='*-*'
+CanaryFalloutVersion='*-*' dotnet run --project build/_build.csproj
 ```
+
+**Override the version through the environment, not `-p:`.** MSBuild reads environment variables as
+global properties, whereas `dotnet run` forwards arguments it doesn't recognise to the built app —
+where Fallout reads `-p:CanaryFalloutVersion=10.4.0-rc.5` as a *target name* and fails with
+`Target with name '10.4.0rc.5' does not exist`. Under `continue-on-error` in CI that looks exactly
+like the compile break stage 2 is watching for, which is how it got noticed.
 
 If stage 2 breaks, install the migrator **outside** the scenario and pass the path explicitly —
 `fallout-migrate` resolves its own root by walking up from the working directory and will rewrite

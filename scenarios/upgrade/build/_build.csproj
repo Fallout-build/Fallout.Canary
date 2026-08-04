@@ -23,16 +23,22 @@
          `*-*` resolves to the current line's newest release candidate or GA without needing
          an edit every time a version ships.
 
-         Both are overridable, so the workflow can drive a specific hop by passing
-         `-p:FalloutVersion=10.4.0-rc.5` on the command line. -->
-    <FalloutBaselineVersion Condition="'$(FalloutBaselineVersion)' == ''">10.3.49</FalloutBaselineVersion>
-    <FalloutTargetVersion Condition="'$(FalloutTargetVersion)' == ''">*-*</FalloutTargetVersion>
+         Both are overridable. Override them through the ENVIRONMENT, not `-p:` — MSBuild reads
+         environment variables as global properties, and `dotnet run` forwards anything it does
+         not recognise to the built app, where Fallout parses it as a target name. So prefix the
+         command with `CanaryFalloutVersion=10.4.0-rc.5` rather than passing a property flag; see
+         this scenario's README for the failure that shape produces.
+
+         The `Canary` prefix keeps these clear of the `Fallout*` MSBuild properties that
+         `fallout-migrate` rewrites, since this scenario deliberately runs the migrator. -->
+    <CanaryBaselineVersion Condition="'$(CanaryBaselineVersion)' == ''">10.3.49</CanaryBaselineVersion>
+    <CanaryTargetVersion Condition="'$(CanaryTargetVersion)' == ''">*-*</CanaryTargetVersion>
     <!-- Defaults to the baseline so the scenario opens in its "before the upgrade" state. -->
-    <FalloutVersion Condition="'$(FalloutVersion)' == ''">$(FalloutBaselineVersion)</FalloutVersion>
+    <CanaryFalloutVersion Condition="'$(CanaryFalloutVersion)' == ''">$(CanaryBaselineVersion)</CanaryFalloutVersion>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Fallout.Common" Version="$(FalloutVersion)" />
+    <PackageReference Include="Fallout.Common" Version="$(CanaryFalloutVersion)" />
   </ItemGroup>
 
 </Project>
