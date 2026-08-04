@@ -22,7 +22,14 @@ jobs:
     strategy:
       fail-fast: false        # one broken scenario must not mask the others
       matrix:
-        scenario: [minimal, transition-shims, tool-manifest]
+        # `kind` selects which steps below run. Most scenarios are `build` — restore the
+        # floated -preview and run the consumer build. The others assert something a single
+        # build can't express, so they get their own steps rather than a second job: gating
+        # keeps the issue open/close reporting shared across every scenario.
+        include:
+          - { scenario: minimal,          kind: build }
+          - { scenario: transition-shims, kind: build }
+          - { scenario: tool-manifest,    kind: tool }
     steps:
       - uses: actions/checkout@v6
 
@@ -33,7 +40,7 @@ jobs:
 
       - name: 'Restore + record resolved -preview version'
         id: ver
-        if: matrix.scenario != 'tool-manifest'
+        if: matrix.kind == 'build'
         env:
           FALLOUT_PACKAGES_TOKEN: ${{ secrets.FALLOUT_PACKAGES_TOKEN }}
         run: |
@@ -47,7 +54,7 @@ jobs:
 
       - name: 'Run scenario build'
         id: run
-        if: matrix.scenario != 'tool-manifest'
+        if: matrix.kind == 'build'
         # Run from the scenario root so Fallout's root-marker walk finds its .fallout/ dir.
         working-directory: scenarios/${{ matrix.scenario }}
         env:
@@ -55,38 +62,61 @@ jobs:
         run: dotnet run --project build/_build.csproj --no-restore
 
 
-      # The tool-manifest scenario exercises package *identity* rather than package contents:
-      # it restores the published dotnet tool from a manifest and runs it, the way a consumer
-      # repo does. See scenarios/tool-manifest/README.md and Fallout-build/Fallout#575.
-      - name: 'Tool manifest: float, restore, and run the published tool'
+      # The tool-manifest scenario exercises package *identity* rather than package contents. It
+      # tests a transition, not a snapshot: a manifest pinned where a real consumer is pinned,
+      # upgraded to the newest published tool. A floated pin could never have caught the rename
+      # that stranded them. See scenarios/tool-manifest/README.md and Fallout-build/Fallout#575.
+      - name: 'Tool manifest: restore the baseline pin, then upgrade to the current line'
         id: toolver
-        if: matrix.scenario == 'tool-manifest'
+        if: matrix.kind == 'tool'
         working-directory: scenarios/tool-manifest
         run: |
           set -euo pipefail
-          # Floats the manifest to the newest published tool. Fails loudly if the published
-          # package id ever changes again — the regression this scenario exists to catch.
-          dotnet tool update Fallout.GlobalTools --prerelease
+          id=$(jq -r '.tools | keys[0]' .config/dotnet-tools.json)
+          from=$(jq -r --arg id "$id" '.tools[$id].version' .config/dotnet-tools.json)
+          echo "Manifest starts pinned at $id $from"
+
+          # Step 1: the pin a consumer is sitting on has to still resolve. If nuget.org ever
+          # unlists it out from under them, their `dotnet tool restore` breaks with no warning.
           dotnet tool restore
-          ver=$(jq -r '.tools."fallout.globaltools".version' .config/dotnet-tools.json)
-          echo "version=$ver" >> "$GITHUB_OUTPUT"
-          echo "Resolved tool version: $ver"
+
+          # Step 2: the upgrade hop. `--prerelease` takes the newest published version of THIS
+          # package id. It cannot cross to a different id, which is exactly why the rename in
+          # Fallout-build/Fallout#575 stranded consumers: their manifest could not reach the new
+          # version at all. If the shipping id is ever renamed again, this step fails.
+          dotnet tool update "$id" --prerelease
+          to=$(jq -r --arg id "$id" '.tools[$id].version' .config/dotnet-tools.json)
+          echo "version=$to" >> "$GITHUB_OUTPUT"
+          echo "Upgraded $id: $from -> $to"
+
+          # A no-op upgrade means the manifest never moved — either the baseline is already the
+          # newest, or the hop silently did nothing. Both need a human to look.
+          if [ "$from" = "$to" ]; then
+            echo "::error::$id did not move off the baseline pin $from — the upgrade hop resolved nothing."
+            exit 1
+          fi
+
           # Resolution is not enough on its own: assert the command is actually wired up.
-          dotnet tool list --local | grep -q '^fallout\.globaltools'
-          echo "fallout.globaltools is present in the local tool list"
+          dotnet tool restore
+          dotnet tool list --local | grep -q "^${id}"
+          echo "$id is present in the local tool list"
 
       # Informational only. Deprecating the retired ids is a manual publishing action tracked
       # in Fallout-build/Fallout#575, so it must not fail the scenario and open a canary issue —
       # that would conflate "the tool is broken" with "we still owe a deprecation".
       - name: 'Tool manifest: report whether retired tool ids are signposted'
-        if: matrix.scenario == 'tool-manifest'
+        if: matrix.kind == 'tool'
         continue-on-error: true
         run: |
           set -uo pipefail
-          for id in fallout.globaltool fallout.cli; do
+          # The retired ids. fallout.globaltool (singular) is NOT here — it is the id the CLI
+          # ships under; the plural was the short-lived rename that got reverted.
+          for id in fallout.globaltools fallout.cli; do
             url="https://api.nuget.org/v3/registration5-gz-semver2/$id/index.json"
+            # Recursive descent, not a fixed path: `//empty` on a fixed path emits nothing at
+            # all for a NOT-deprecated package, which the old form then reported as "unknown".
             state=$(curl -sS --compressed "$url" \
-              | jq -r 'if (.items[-1].items[-1].catalogEntry.deprecation? // empty) then "yes" else "no" end' \
+              | jq -r '[.. | .deprecation? // empty] | if length > 0 then "yes" else "no" end' \
               || echo unknown)
             echo "retired id $id deprecated on nuget.org: ${state:-unknown}" | tee -a "$GITHUB_STEP_SUMMARY"
           done
