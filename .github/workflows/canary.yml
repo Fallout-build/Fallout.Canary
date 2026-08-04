@@ -22,7 +22,15 @@ jobs:
     strategy:
       fail-fast: false        # one broken scenario must not mask the others
       matrix:
-        scenario: [minimal, transition-shims, tool-manifest]
+        # `kind` selects which steps below run. Most scenarios are `build` — restore the
+        # floated -preview and run the consumer build. The others assert something a single
+        # build can't express, so they get their own steps rather than a second job: gating
+        # keeps the issue open/close reporting shared across every scenario.
+        include:
+          - { scenario: minimal,          kind: build }
+          - { scenario: transition-shims, kind: build }
+          - { scenario: tool-manifest,    kind: tool }
+          - { scenario: upgrade,          kind: upgrade }
     steps:
       - uses: actions/checkout@v6
 
@@ -33,7 +41,7 @@ jobs:
 
       - name: 'Restore + record resolved -preview version'
         id: ver
-        if: matrix.scenario != 'tool-manifest'
+        if: matrix.kind == 'build'
         env:
           FALLOUT_PACKAGES_TOKEN: ${{ secrets.FALLOUT_PACKAGES_TOKEN }}
         run: |
@@ -47,7 +55,7 @@ jobs:
 
       - name: 'Run scenario build'
         id: run
-        if: matrix.scenario != 'tool-manifest'
+        if: matrix.kind == 'build'
         # Run from the scenario root so Fallout's root-marker walk finds its .fallout/ dir.
         working-directory: scenarios/${{ matrix.scenario }}
         env:
@@ -55,48 +63,164 @@ jobs:
         run: dotnet run --project build/_build.csproj --no-restore
 
 
-      # The tool-manifest scenario exercises package *identity* rather than package contents:
-      # it restores the published dotnet tool from a manifest and runs it, the way a consumer
-      # repo does. See scenarios/tool-manifest/README.md and Fallout-build/Fallout#575.
-      - name: 'Tool manifest: float, restore, and run the published tool'
+      # The tool-manifest scenario exercises package *identity* rather than package contents. It
+      # tests a transition, not a snapshot: a manifest pinned where a real consumer is pinned,
+      # upgraded to the newest published tool. A floated pin could never have caught the rename
+      # that stranded them. See scenarios/tool-manifest/README.md and Fallout-build/Fallout#575.
+      - name: 'Tool manifest: restore the baseline pin, then upgrade to the current line'
         id: toolver
-        if: matrix.scenario == 'tool-manifest'
+        if: matrix.kind == 'tool'
         working-directory: scenarios/tool-manifest
         run: |
           set -euo pipefail
-          # Floats the manifest to the newest published tool. Fails loudly if the published
-          # package id ever changes again — the regression this scenario exists to catch.
-          dotnet tool update Fallout.GlobalTools --prerelease
+          id=$(jq -r '.tools | keys[0]' .config/dotnet-tools.json)
+          from=$(jq -r --arg id "$id" '.tools[$id].version' .config/dotnet-tools.json)
+          echo "Manifest starts pinned at $id $from"
+
+          # Step 1: the pin a consumer is sitting on has to still resolve. If nuget.org ever
+          # unlists it out from under them, their `dotnet tool restore` breaks with no warning.
           dotnet tool restore
-          ver=$(jq -r '.tools."fallout.globaltools".version' .config/dotnet-tools.json)
-          echo "version=$ver" >> "$GITHUB_OUTPUT"
-          echo "Resolved tool version: $ver"
+
+          # Step 2: the upgrade hop. `--prerelease` takes the newest published version of THIS
+          # package id. It cannot cross to a different id, which is exactly why the rename in
+          # Fallout-build/Fallout#575 stranded consumers: their manifest could not reach the new
+          # version at all. If the shipping id is ever renamed again, this step fails.
+          dotnet tool update "$id" --prerelease
+          to=$(jq -r --arg id "$id" '.tools[$id].version' .config/dotnet-tools.json)
+          echo "version=$to" >> "$GITHUB_OUTPUT"
+          echo "Upgraded $id: $from -> $to"
+
+          # A no-op upgrade means the manifest never moved — either the baseline is already the
+          # newest, or the hop silently did nothing. Both need a human to look.
+          if [ "$from" = "$to" ]; then
+            echo "::error::$id did not move off the baseline pin $from — the upgrade hop resolved nothing."
+            exit 1
+          fi
+
           # Resolution is not enough on its own: assert the command is actually wired up.
-          dotnet tool list --local | grep -q '^fallout\.globaltools'
-          echo "fallout.globaltools is present in the local tool list"
+          dotnet tool restore
+          dotnet tool list --local | grep -q "^${id}"
+          echo "$id is present in the local tool list"
 
       # Informational only. Deprecating the retired ids is a manual publishing action tracked
       # in Fallout-build/Fallout#575, so it must not fail the scenario and open a canary issue —
       # that would conflate "the tool is broken" with "we still owe a deprecation".
       - name: 'Tool manifest: report whether retired tool ids are signposted'
-        if: matrix.scenario == 'tool-manifest'
+        if: matrix.kind == 'tool'
         continue-on-error: true
         run: |
           set -uo pipefail
-          for id in fallout.globaltool fallout.cli; do
+          # The retired ids. fallout.globaltool (singular) is NOT here — it is the id the CLI
+          # ships under; the plural was the short-lived rename that got reverted.
+          for id in fallout.globaltools fallout.cli; do
             url="https://api.nuget.org/v3/registration5-gz-semver2/$id/index.json"
+            # Recursive descent, not a fixed path: `//empty` on a fixed path emits nothing at
+            # all for a NOT-deprecated package, which the old form then reported as "unknown".
             state=$(curl -sS --compressed "$url" \
-              | jq -r 'if (.items[-1].items[-1].catalogEntry.deprecation? // empty) then "yes" else "no" end' \
+              | jq -r '[.. | .deprecation? // empty] | if length > 0 then "yes" else "no" end' \
               || echo unknown)
             echo "retired id $id deprecated on nuget.org: ${state:-unknown}" | tee -a "$GITHUB_STEP_SUMMARY"
           done
+
+      # The upgrade scenario takes one consumer's source across a version bump, unchanged, and
+      # asserts they can reach green. See scenarios/upgrade/README.md and
+      # Fallout-build/Fallout#619. It reads nuget.org only, so it needs no packages token.
+      - name: 'Upgrade: resolve the hop'
+        id: hop
+        if: matrix.kind == 'upgrade'
+        working-directory: scenarios/upgrade
+        run: |
+          set -euo pipefail
+          # The baseline lives in the csproj so there is one source of truth for it.
+          baseline=$(dotnet msbuild build/_build.csproj -getProperty:CanaryBaselineVersion)
+          # The target is resolved concretely rather than floated, because the same value has to
+          # drive `dotnet tool install --version` further down, which will not take a range.
+          # The search API returns listed versions only — which is what a consumer sees.
+          target=$(curl -sS 'https://azuresearch-usnc.nuget.org/query?q=packageid:fallout.common&prerelease=true&semVerLevel=2.0.0' \
+            | jq -r '.data[0].version')
+          if [ -z "$target" ] || [ "$target" = "null" ]; then
+            echo "::error::could not resolve the newest listed Fallout.Common version from nuget.org"
+            exit 1
+          fi
+          echo "baseline=$baseline" >> "$GITHUB_OUTPUT"
+          echo "target=$target" >> "$GITHUB_OUTPUT"
+          echo "version=$baseline -> $target" >> "$GITHUB_OUTPUT"
+          echo "Upgrade hop: $baseline -> $target"
+
+      # Stage 1. The consumer exactly as they are today, on the previous line. This must be
+      # green: if it isn't, the scenario itself is broken and says nothing about the upgrade.
+      - name: 'Upgrade: build at the baseline version'
+        if: matrix.kind == 'upgrade'
+        working-directory: scenarios/upgrade
+        run: dotnet run --project build/_build.csproj
+
+      # Stage 2. Bump the version and change nothing else — the whole edit a consumer makes.
+      # Green here means the upgrade is clean. Red is not a failure yet: stage 3 decides,
+      # because "breaks but fallout-migrate fixes it" is a supported upgrade path, not a bug.
+      #
+      # Build and run as separate commands so a compile break is unambiguously a compile break.
+      # The version goes through the environment, never `-p:`: `dotnet run` forwards unrecognised
+      # arguments to the built app, and Fallout then reads `-p:CanaryFalloutVersion=10.4.0-rc.5`
+      # as a target name and fails with "Target with name '10.4.0rc.5' does not exist" — which
+      # under continue-on-error looks exactly like the compile break this stage is watching for.
+      - name: 'Upgrade: bump to the target version'
+        id: bump
+        if: matrix.kind == 'upgrade'
+        continue-on-error: true
+        working-directory: scenarios/upgrade
+        env:
+          CanaryFalloutVersion: ${{ steps.hop.outputs.target }}
+        run: |
+          set -euo pipefail
+          rm -rf build/obj build/bin
+          dotnet build build/_build.csproj
+          dotnet run --project build/_build.csproj --no-build
+
+      # Stage 3. The documented escape hatch, run only when the bare bump broke. This is what
+      # separates "the upgrade is rough" from "the upgrade is impossible" — and it fails the
+      # scenario if migrate can't get the consumer to green either.
+      - name: 'Upgrade: fall back to fallout-migrate'
+        if: matrix.kind == 'upgrade' && steps.bump.outcome == 'failure'
+        working-directory: scenarios/upgrade
+        env:
+          # NOT `TARGET`. Fallout injects build parameters from the environment, and a variable
+          # named TARGET binds to its built-in --target — the run then dies with "Target with
+          # name '10.4.0rc.5' does not exist" instead of building anything.
+          CANARY_TARGET_VERSION: ${{ steps.hop.outputs.target }}
+          CanaryFalloutVersion: ${{ steps.hop.outputs.target }}
+        run: |
+          set -euo pipefail
+          dotnet tool install Fallout.Migrate --version "$CANARY_TARGET_VERSION" --tool-path "$RUNNER_TEMP/migrate"
+          # Always pass the path explicitly. Left to itself fallout-migrate walks up from the
+          # working directory looking for something that looks like a build root, and would
+          # rewrite the whole checkout if this scenario ever stopped looking like one
+          # (Fallout-build/Fallout#617). Redirect stdin so its confirmation prompt self-accepts.
+          "$RUNNER_TEMP/migrate/fallout-migrate" "$PWD" < /dev/null
+          echo '--- what migrate changed ---'
+          git --no-pager diff --stat
+          rm -rf build/obj build/bin
+          dotnet build build/_build.csproj
+          dotnet run --project build/_build.csproj --no-build
+
+      # Records which path the upgrade took. A consumer needing fallout-migrate is a supported
+      # outcome but not a silent one — it means the release notes owe them an upgrade note.
+      - name: 'Upgrade: report which path got the consumer to green'
+        if: matrix.kind == 'upgrade' && !cancelled()
+        run: |
+          set -euo pipefail
+          hop='${{ steps.hop.outputs.baseline }} -> ${{ steps.hop.outputs.target }}'
+          if [ '${{ steps.bump.outcome }}' = 'success' ]; then
+            echo "✅ \`$hop\`: clean — a version bump was the only edit needed." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "⚠️ \`$hop\`: **the bare version bump does not compile.** \`fallout-migrate\` was required to reach green — the release notes must say so." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: 'On failure: open or update the canary issue'
         if: failure()
         uses: actions/github-script@v7
         env:
           SCENARIO: ${{ matrix.scenario }}
-          VERSION: ${{ steps.ver.outputs.version || steps.toolver.outputs.version }}
+          VERSION: ${{ steps.ver.outputs.version || steps.toolver.outputs.version || steps.hop.outputs.version }}
         with:
           script: |
             const scenario = process.env.SCENARIO;

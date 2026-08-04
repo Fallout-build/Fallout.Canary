@@ -4,9 +4,13 @@ obj/
 [Oo]utput/
 artifacts/
 
-## Fallout working dirs
-.fallout/temp/
-.fallout/build-attempt*.json
+## Fallout working dirs. Leading **/ matters: a pattern with an interior slash is
+## anchored to this file's directory, so `.fallout/temp/` alone ignored only a root
+## one and let every scenario's build logs through.
+**/.fallout/temp/
+**/.fallout/build-attempt*.json
+## Regenerated on every run from the build's parameters — derived, not source.
+**/.fallout/build.schema.json
 
 ## IDE / OS
 .vs/
