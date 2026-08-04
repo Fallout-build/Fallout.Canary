@@ -183,11 +183,14 @@ jobs:
         if: matrix.kind == 'upgrade' && steps.bump.outcome == 'failure'
         working-directory: scenarios/upgrade
         env:
-          TARGET: ${{ steps.hop.outputs.target }}
+          # NOT `TARGET`. Fallout injects build parameters from the environment, and a variable
+          # named TARGET binds to its built-in --target — the run then dies with "Target with
+          # name '10.4.0rc.5' does not exist" instead of building anything.
+          CANARY_TARGET_VERSION: ${{ steps.hop.outputs.target }}
           CanaryFalloutVersion: ${{ steps.hop.outputs.target }}
         run: |
           set -euo pipefail
-          dotnet tool install Fallout.Migrate --version "$TARGET" --tool-path "$RUNNER_TEMP/migrate"
+          dotnet tool install Fallout.Migrate --version "$CANARY_TARGET_VERSION" --tool-path "$RUNNER_TEMP/migrate"
           # Always pass the path explicitly. Left to itself fallout-migrate walks up from the
           # working directory looking for something that looks like a build root, and would
           # rewrite the whole checkout if this scenario ever stopped looking like one
