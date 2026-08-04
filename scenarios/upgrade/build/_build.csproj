@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace></RootNamespace>
+    <NoWarn>CS0649;CS0169;CA1050;CA1822;CA2211;IDE1006</NoWarn>
+    <!-- Scenario root = scenarios/upgrade (one up from build/). -->
+    <FalloutRootDirectory>..</FalloutRootDirectory>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- The upgrade hop under test. Unlike the other scenarios this one does NOT float: the
+         whole point is to move a consumer from one specific version to another and see whether
+         they survive it.
+
+         Baseline = the last GA of the previous production line. Pinned exactly, because it is
+         history: it is what a real consumer is sitting on today.
+
+         Target = the newest thing on nuget.org, floated. nuget.org only ever carries the
+         production line (main's -preview builds go to GitHub Packages and never here), so
+         `*-*` resolves to the current line's newest release candidate or GA without needing
+         an edit every time a version ships.
+
+         Both are overridable, so the workflow can drive a specific hop by passing
+         `-p:FalloutVersion=10.4.0-rc.5` on the command line. -->
+    <FalloutBaselineVersion Condition="'$(FalloutBaselineVersion)' == ''">10.3.49</FalloutBaselineVersion>
+    <FalloutTargetVersion Condition="'$(FalloutTargetVersion)' == ''">*-*</FalloutTargetVersion>
+    <!-- Defaults to the baseline so the scenario opens in its "before the upgrade" state. -->
+    <FalloutVersion Condition="'$(FalloutVersion)' == ''">$(FalloutBaselineVersion)</FalloutVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Fallout.Common" Version="$(FalloutVersion)" />
+  </ItemGroup>
+
+</Project>

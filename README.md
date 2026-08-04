@@ -35,16 +35,21 @@ release on Fallout (-preview → GitHub Packages)
 | Tier | Scenario | Asserts |
 |------|----------|---------|
 | 0 — smoke | [`minimal`](scenarios/minimal) | `Fallout.Common` restores from the feed; a build with `Restore`/`Compile` targets compiles (source generator ran) and drives the `dotnet` tool wrapper. |
-| 1 — tool identity | [`tool-manifest`](scenarios/tool-manifest) | The published dotnet-tool package id still resolves: a manifest floats to the newest `Fallout.GlobalTools`, restores, and the `fallout` command is wired up. Reads nuget.org, not the `-preview` feed. |
+| 1 — tool identity | [`tool-manifest`](scenarios/tool-manifest) | A manifest pinned at the previous line's last GA restores, then upgrades to the newest published tool. Catches a tool package-id rename stranding consumers. Reads nuget.org, not the `-preview` feed. |
+| 1 — upgrade path | [`upgrade`](scenarios/upgrade) | A 10.3-era consumer's build source, unchanged, survives the bump to the current line — either directly, or via one `fallout-migrate` run. Reads nuget.org. |
 | 2 — compat | [`transition-shims`](scenarios/transition-shims) | A build authored against the legacy `Nuke.*` namespaces (`class Build : NukeBuild`) compiles and runs against the `Nuke.Common` shim package. |
 
-Tier 1's global-tool half is covered by `tool-manifest`. The remaining tier 1 (tool wrappers, and the tool *running* a build) and tier 3 (large target graph, multi-solution, IDE tooling) are sketched in the design doc and land incrementally.
+`tool-manifest` and `upgrade` are the two scenarios that test a **transition** rather than a snapshot: they pin what a consumer is on today and check they can get to what ships now. Everything else floats to the newest package and asks whether it works at all. Both failure modes have already shipped ([#575](https://github.com/Fallout-build/Fallout/issues/575), [#619](https://github.com/Fallout-build/Fallout/issues/619)) and neither was catchable by a scenario that only ever looks at the newest version.
+
+The remaining tier 1 (tool wrappers, and the tool *running* a build) and tier 3 (large target graph, multi-solution, IDE tooling) are sketched in the design doc and land incrementally.
 
 ## Add a scenario
 
-1. Create `scenarios/<name>/` with a Fallout consumer build at `scenarios/<name>/build/_build.csproj` and a `Build.cs` whose default target is what you want exercised. A scenario that exercises something other than a consumer build — see [`tool-manifest`](scenarios/tool-manifest) — instead gets its own step in the workflow, gated on `matrix.scenario`.
+1. Create `scenarios/<name>/` with a Fallout consumer build at `scenarios/<name>/build/_build.csproj` and a `Build.cs` whose default target is what you want exercised.
 2. Reference the released package(s) with a floated version: `Version="2026.1.*-*"`.
-3. Add `<name>` to the `scenario` matrix in [`.github/workflows/canary.yml`](.github/workflows/canary.yml).
+3. Add `- { scenario: <name>, kind: build }` to the matrix in [`.github/workflows/canary.yml`](.github/workflows/canary.yml).
+
+`kind` selects which workflow steps run. `build` is the default shape — restore the floated package and run the consumer build. A scenario asserting something a single build can't express gets its own `kind` and its own steps, gated on `matrix.kind`: see [`tool-manifest`](scenarios/tool-manifest) (`kind: tool`) and [`upgrade`](scenarios/upgrade) (`kind: upgrade`). Gating rather than adding a second job keeps the issue open/close reporting shared across every scenario.
 
 A scenario "passes" when its build exits 0. For stronger guarantees, add assertions on the build output inside the build's targets (fail the target if an expected artifact/member is missing).
 

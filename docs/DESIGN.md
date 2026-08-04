@@ -22,6 +22,20 @@ This is acceptance/canary testing of the **artifact**, not the source.
 - **Channel = GitHub Packages `-preview`** (`https://nuget.pkg.github.com/Fallout-build/index.json`). The `-preview` feed is what we want early warning on. GA/`nuget.org` validation can be added as a separate trigger/matrix axis when a `release/YYYY` line is cut.
 - **Float, don't pin:** `Version="2026.1.*-*"`. Floating is what makes it a canary — every new release gets exercised automatically. Reproducibility comes from the resolved version printed in the run log (and captured in any failure issue), not from a lockfile.
 
+## Amendment (2026-08-04): transition scenarios pin deliberately
+
+Floating catches "the newest release is broken". It structurally cannot catch "the newest release is fine, and existing users can't reach it" — because a floated scenario has no starting point to move *from*. Two consumer-stranding failures shipped through that blind spot: [#575](https://github.com/Fallout-build/Fallout/issues/575) (tool package-id rename) and [#619](https://github.com/Fallout-build/Fallout/issues/619) (`Fallout.Common.ProjectModel` → `Fallout.Solutions`).
+
+So a scenario may **pin a baseline** when what it tests is a *transition* rather than a snapshot:
+
+- The baseline is the previous production line's last GA — history, therefore pinned exactly. Bumped once per line.
+- The target stays floating, resolved per-run as "newest listed on nuget.org". nuget.org only ever carries the production line, so that expression *is* the current line and needs no maintenance.
+- Such a scenario reads nuget.org, not the `-preview` feed: a consumer upgrading between released lines restores from nuget.org, and testing the hop against a feed they never configure would prove nothing. It also means these scenarios need no `FALLOUT_PACKAGES_TOKEN`.
+
+`tool-manifest` and `upgrade` are the two. This is also the "GA/nuget.org validation as a separate matrix axis" that the decisions above anticipated, arriving as a scenario property rather than an axis.
+
+**A rough upgrade is not a failed upgrade.** `upgrade` treats "breaks on a bare version bump, fixed by one `fallout-migrate` run" as a pass, and reports which path was taken in the run summary. What fails the scenario is a consumer having *no* path to green. Asserting that the bare bump must always work would make the canary red on every deliberate, migration-pathed rename.
+
 ## Auth
 
 The canary repo's default `GITHUB_TOKEN` **cannot** read packages owned by `Fallout-build/Fallout` unless those packages are explicitly granted to this repo or made org-internal. So CI authenticates to the feed with a **PAT** (classic, `read:packages`) stored as the repo secret **`FALLOUT_PACKAGES_TOKEN`**, wired into `nuget.config` via env-var expansion.
@@ -53,7 +67,9 @@ Add to `Fallout/.github/workflows/preview.yml` after the publish step (touches t
 
 - **Tier 0 — `minimal`** *(built)* — package restore + generator + one tool wrapper.
 - **Tier 2 — `transition-shims`** *(built)* — `class Build : NukeBuild` against the `Nuke.Common` shim.
-- **Tier 1 — `global-tool`** — `dotnet tool install fallout.globaltools --prerelease`, run a target via `dotnet fallout`.
+- **Tier 1 — `tool-manifest`** *(built)* — a manifest pinned at the previous line's GA restores, then upgrades to the newest published tool id.
+- **Tier 1 — `upgrade`** *(built)* — a previous-line consumer's source, unchanged, across the version bump; `fallout-migrate` as the fallback path.
+- **Tier 1 — `global-tool`** — run a target via `dotnet fallout` — the tool *executing* a build, which `tool-manifest` deliberately does not assert.
 - **Tier 1 — `tool-wrappers`** — exercise several generated tool wrappers (dotnet, git, …).
 - **Tier 3 — `large-graph`** — many interdependent targets, conditional/skipped targets, matrix parameters, fan-out.
 - **Tier 3 — `ide-tooling`** — `build-graph.json` export validated against `build.schema.json`.
