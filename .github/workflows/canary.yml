@@ -66,14 +66,14 @@ jobs:
           set -euo pipefail
           # Floats the manifest to the newest published tool. Fails loudly if the published
           # package id ever changes again — the regression this scenario exists to catch.
-          dotnet tool update Fallout.GlobalTools --prerelease
+          dotnet tool update Fallout.GlobalTool --prerelease
           dotnet tool restore
-          ver=$(jq -r '.tools."fallout.globaltools".version' .config/dotnet-tools.json)
+          ver=$(jq -r '.tools."fallout.globaltool".version' .config/dotnet-tools.json)
           echo "version=$ver" >> "$GITHUB_OUTPUT"
           echo "Resolved tool version: $ver"
           # Resolution is not enough on its own: assert the command is actually wired up.
-          dotnet tool list --local | grep -q '^fallout\.globaltools'
-          echo "fallout.globaltools is present in the local tool list"
+          dotnet tool list --local | grep -qE '^fallout\.globaltool[[:space:]]'
+          echo "fallout.globaltool is present in the local tool list"
 
       # Informational only. Deprecating the retired ids is a manual publishing action tracked
       # in Fallout-build/Fallout#575, so it must not fail the scenario and open a canary issue —
@@ -83,7 +83,7 @@ jobs:
         continue-on-error: true
         run: |
           set -uo pipefail
-          for id in fallout.globaltool fallout.cli; do
+          for id in fallout.globaltools fallout.cli; do
             url="https://api.nuget.org/v3/registration5-gz-semver2/$id/index.json"
             state=$(curl -sS --compressed "$url" \
               | jq -r 'if (.items[-1].items[-1].catalogEntry.deprecation? // empty) then "yes" else "no" end' \

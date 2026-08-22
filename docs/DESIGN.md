@@ -20,7 +20,7 @@ This is acceptance/canary testing of the **artifact**, not the source.
 - **Triggers:** `repository_dispatch` (`fallout-preview-published`) from Fallout's release on every `-preview` publish **+** nightly schedule **+** manual dispatch.
 - **Issues filed here**, deduped per scenario, auto-closed on green. (If a regression is confirmed real, cross-link an issue on `Fallout-build/Fallout` by hand — escalation stays manual for now.)
 - **Channel = GitHub Packages `-preview`** (`https://nuget.pkg.github.com/Fallout-build/index.json`). The `-preview` feed is what we want early warning on. GA/`nuget.org` validation can be added as a separate trigger/matrix axis when a `release/YYYY` line is cut.
-- **Float, don't pin:** `Version="2026.1.*-*"`. Floating is what makes it a canary — every new release gets exercised automatically. Reproducibility comes from the resolved version printed in the run log (and captured in any failure issue), not from a lockfile.
+- **Float, don't pin:** `Version="10.*-*"`. Floating is what makes it a canary — every new release gets exercised automatically. Reproducibility comes from the resolved version printed in the run log (and captured in any failure issue), not from a lockfile.
 
 ## Auth
 
@@ -53,7 +53,7 @@ Add to `Fallout/.github/workflows/preview.yml` after the publish step (touches t
 
 - **Tier 0 — `minimal`** *(built)* — package restore + generator + one tool wrapper.
 - **Tier 2 — `transition-shims`** *(built)* — `class Build : NukeBuild` against the `Nuke.Common` shim.
-- **Tier 1 — `global-tool`** — `dotnet tool install fallout.globaltools --prerelease`, run a target via `dotnet fallout`.
+- **Tier 1 — `global-tool`** — `dotnet tool install Fallout.GlobalTool --prerelease`, run a target via `dotnet fallout`.
 - **Tier 1 — `tool-wrappers`** — exercise several generated tool wrappers (dotnet, git, …).
 - **Tier 3 — `large-graph`** — many interdependent targets, conditional/skipped targets, matrix parameters, fan-out.
 - **Tier 3 — `ide-tooling`** — `build-graph.json` export validated against `build.schema.json`.

@@ -14,7 +14,7 @@
     <!-- Floated to the latest published -preview from the Fallout-build GitHub Packages
          feed. This is the package under test. The package is expected to bring its
          source generators (as an analyzer) and build props/targets transitively. -->
-    <PackageReference Include="Fallout.Common" Version="2026.1.*-*" />
+    <PackageReference Include="Fallout.Common" Version="10.*-*" />
   </ItemGroup>
 
 </Project>
