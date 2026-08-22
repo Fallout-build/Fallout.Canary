@@ -14,7 +14,7 @@
          not Fallout.Common. Tests that the shim package (which depends on Fallout.Common
          and must flow its source generator) lets a classic `class Build : NukeBuild`
          compile and run. Floated to the latest published -preview. -->
-    <PackageReference Include="Nuke.Common" Version="2026.1.*-*" />
+    <PackageReference Include="Nuke.Common" Version="10.*-*" />
   </ItemGroup>
 
 </Project>

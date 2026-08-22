@@ -1,6 +1,6 @@
 <Project>
 
-  <!-- Scenarios float their Fallout package versions inline (2026.1.*-*), so central
+  <!-- Scenarios float their Fallout package versions inline (10.*-*), so central
        package management is deliberately OFF. Do not add a Directory.Packages.props. -->
   <PropertyGroup>
     <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>

@@ -5,7 +5,7 @@ Restores the `fallout` dotnet tool from a local manifest and runs it, the way a 
 Unlike the other scenarios this one does not build a `_build.csproj`. It exercises **package
 identity** rather than package contents:
 
-1. `dotnet tool update Fallout.GlobalTools --prerelease` floats the manifest to the newest published
+1. `dotnet tool update Fallout.GlobalTool --prerelease` floats the manifest to the newest published
    tool. This step fails if the published tool package id ever changes again, which is the regression
    this scenario exists to catch.
 2. `dotnet tool restore` resolves the pin.
@@ -25,5 +25,9 @@ changed from `Fallout.GlobalTool` to `Fallout.GlobalTools`, the old id was left 
 deprecated, and consumers pinning it silently stopped receiving updates. `rollForward` does not help,
 because it resolves a version within one package id and cannot cross to a different one.
 
-Nothing in the canary covered the tool's install path at the time, so the rename shipped unnoticed —
-even though the root `nuget.config` already had a source mapping for `fallout.globaltools`.
+Nothing in the canary covered the tool's install path at the time, so the rename shipped unnoticed.
+
+**The rename was then reverted.** `Fallout.Cli.csproj` sets `<PackageId>Fallout.GlobalTool</PackageId>`
+again, so the singular id is canonical and `Fallout.GlobalTools` is the retired one. The plural id got a
+single nuget.org release (`10.4.0-rc.4`, since unlisted) before the revert. This scenario tracks the
+singular id and reports on the retired ones.
